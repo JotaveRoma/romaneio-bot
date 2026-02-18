@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: bot-romaneio
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: TOKEN
+        sync: false
