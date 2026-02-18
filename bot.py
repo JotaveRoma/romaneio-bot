@@ -1,5 +1,5 @@
 import os
-from flask import Flask, requesthttps://github.com/JotaveRoma/romaneio-bot/blob/main/bot.py
+from flask import Flask, request
 from telegram import Bot, Update
 from telegram.ext import Dispatcher, CommandHandler
 
@@ -25,4 +25,4 @@ def index():
     return "Bot rodando"
 
 if __name__ == "__main__":
-    app.run(port=10000)
+    app.run(host="0.0.0.0", port=10000)
