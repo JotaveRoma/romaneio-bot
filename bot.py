@@ -30,3 +30,8 @@ def webhook():
             enviar_mensagem(chat_id, "Bot online 🚀")
 
     return "ok", 200
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
