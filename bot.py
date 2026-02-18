@@ -1,24 +1,22 @@
-import os
-import requests
 from flask import Flask, request
-
-TOKEN = os.environ.get("BOT_TOKEN")
-URL = f"https://api.telegram.org/bot{TOKEN}/"
+import requests
+import os
 
 app = Flask(__name__)
 
-def send_message(chat_id, text):
-    requests.post(
-        URL + "sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text
-        }
-    )
+TOKEN = os.environ.get("TOKEN")
 
-@app.route("/", methods=["GET"])
+def enviar_mensagem(chat_id, texto):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": texto
+    }
+    requests.post(url, json=payload)
+
+@app.route("/")
 def home():
-    return "Bot rodando 🚀"
+    return "Bot rodando 🚀", 200
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -26,12 +24,9 @@ def webhook():
 
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
+        texto = data["message"].get("text")
 
-        if text == "/start":
-            send_message(chat_id, "Bot online 🚀")
+        if texto == "/start":
+            enviar_mensagem(chat_id, "Bot online 🚀")
 
-    return "ok"
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    return "ok", 200
