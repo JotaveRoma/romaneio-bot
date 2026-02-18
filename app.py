@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configurações do bot
-TOKEN = os.environ.get("8266798738:AAFbrE5F14O89ifWJXeW9OSnTvD-mFZfkUw")
+TOKEN = os.environ.get("8136504178:AAFVoVSxSkRQ_6S5CfxlpoYBzgVs-fH8tUk")
 if not TOKEN:
     logger.error("Token do Telegram não configurado!")
 
@@ -294,3 +294,4 @@ else:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
