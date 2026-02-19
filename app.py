@@ -471,17 +471,21 @@ def processar_mensagem(update):
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS COM LOG DO CONTEÚDO =====
+# ===== VARIÁVEL GLOBAL PARA CONTROLAR THREAD ÚNICA =====
+verificacao_ativa = False
+
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS CORRIGIDA =====
 def verificar_alertas():
     """Thread principal que verifica e envia alertas"""
-    logger.info("🔄 Thread de verificação de alertas iniciada")
+    global verificacao_ativa
     
-    # TESTE INICIAL PARA VERIFICAR SE A THREAD ESTÁ RODANDO
-    try:
-        with lock:
-            logger.info(f"📊 THREAD ATIVA - Chats agora: {list(romaneios_por_grupo.keys())}")
-    except Exception as e:
-        logger.error(f"🔥 Erro inicial: {e}")
+    # IMPEDE MÚLTIPLAS THREADS
+    if verificacao_ativa:
+        logger.warning("🚫 Thread de verificação já está rodando! Ignorando nova tentativa.")
+        return
+    
+    verificacao_ativa = True
+    logger.info("🔄 Thread de verificação de alertas iniciada (ÚNICA)")
     
     contador = 0
     
@@ -490,24 +494,12 @@ def verificar_alertas():
             contador += 1
             agora = datetime.now(br_tz)
             
-            # LOG OBRIGATÓRIO PARA VERIFICAR QUE A THREAD RODA
+            # LOG OBRIGATÓRIO
             logger.info(f"⏰ [VERIFICAÇÃO #{contador}] EXECUTANDO EM {agora.strftime('%H:%M:%S')}")
             
             with lock:
-                # LOG DO CONTEÚDO COMPLETO DO DICIONÁRIO
-                conteudo_completo = {}
-                for chat_id, romaneios in romaneios_por_grupo.items():
-                    conteudo_completo[str(chat_id)] = [
-                        {
-                            'cliente': r['cliente'],
-                            'horario': r['horario'],
-                            'ativo': r['ativo'],
-                            'alertas': r['alertas_enviados']
-                        }
-                        for r in romaneios
-                    ]
-                logger.info(f"🔍 CONTEÚDO DO DICIONÁRIO: {conteudo_completo}")
-                
+                # LOG DO CONTEÚDO COMPLETO
+                logger.info(f"🔍 CONTEÚDO DO DICIONÁRIO: {dict(romaneios_por_grupo)}")
                 total_chats = len(romaneios_por_grupo)
                 logger.info(f"📊 Total de chats agora: {total_chats}")
                 
@@ -573,7 +565,6 @@ def verificar_alertas():
             logger.error(f"🔥 ERRO NA VERIFICAÇÃO: {e}")
             logger.error(traceback.format_exc())
         
-        # Aguarda 30 segundos
         time.sleep(30)
 
 # ===== ROTA PARA FORÇAR VERIFICAÇÃO MANUAL =====
