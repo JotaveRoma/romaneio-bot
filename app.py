@@ -53,6 +53,20 @@ class DictMonitorado(dict):
             logger.error(f"  {line.strip()}")
         logger.error("="*60)
         super().clear()
+    
+    def __delitem__(self, key):
+        logger.error(f"🚨 DELITEM DETECTADO: removendo chave {key}")
+        logger.error("Stack trace:")
+        for line in traceback.format_stack():
+            logger.error(f"  {line.strip()}")
+        super().__delitem__(key)
+    
+    def pop(self, key, default=None):
+        logger.error(f"🚨 POP DETECTADO: removendo chave {key}")
+        logger.error("Stack trace:")
+        for line in traceback.format_stack():
+            logger.error(f"  {line.strip()}")
+        return super().pop(key, default)
 
 # ===== ESTRUTURA DE DADOS =====
 romaneios_por_grupo = DictMonitorado()
@@ -457,7 +471,7 @@ def processar_mensagem(update):
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS CORRIGIDA =====
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS COM LOG DO CONTEÚDO =====
 def verificar_alertas():
     """Thread principal que verifica e envia alertas"""
     logger.info("🔄 Thread de verificação de alertas iniciada")
@@ -480,6 +494,20 @@ def verificar_alertas():
             logger.info(f"⏰ [VERIFICAÇÃO #{contador}] EXECUTANDO EM {agora.strftime('%H:%M:%S')}")
             
             with lock:
+                # LOG DO CONTEÚDO COMPLETO DO DICIONÁRIO
+                conteudo_completo = {}
+                for chat_id, romaneios in romaneios_por_grupo.items():
+                    conteudo_completo[str(chat_id)] = [
+                        {
+                            'cliente': r['cliente'],
+                            'horario': r['horario'],
+                            'ativo': r['ativo'],
+                            'alertas': r['alertas_enviados']
+                        }
+                        for r in romaneios
+                    ]
+                logger.info(f"🔍 CONTEÚDO DO DICIONÁRIO: {conteudo_completo}")
+                
                 total_chats = len(romaneios_por_grupo)
                 logger.info(f"📊 Total de chats agora: {total_chats}")
                 
