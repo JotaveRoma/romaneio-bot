@@ -44,37 +44,61 @@ else:
 romaneios_por_grupo = {}
 lock = threading.Lock()
 
-# ===== SISTEMA DE PROTEÇÃO CONTRA RESET =====
+# ===== SISTEMA DE PROTEÇÃO CONTRA RESET MELHORADO =====
 def proteger_dicionario(func):
     """Decorador que protege o dicionário contra resets acidentais"""
     def wrapper(*args, **kwargs):
         global romaneios_por_grupo
         # Salva o estado antes
-        estado_anterior = dict(romaneios_por_grupo) if romaneios_por_grupo else {}
+        with lock:
+            estado_anterior = dict(romaneios_por_grupo) if romaneios_por_grupo else {}
+            id_anterior = id(romaneios_por_grupo)
+            tamanho_anterior = len(romaneios_por_grupo)
+            logger.info(f"🛡️ [PROTECTOR] {func.__name__} - Antes: {tamanho_anterior} chats, ID: {id_anterior}")
         
         try:
             resultado = func(*args, **kwargs)
             
-            # Verifica se o dicionário foi resetado
+            # Verifica mudanças
             with lock:
-                if not romaneios_por_grupo and estado_anterior:
-                    logger.error(f"🚨 RESET DETECTADO NA FUNÇÃO {func.__name__}!")
-                    logger.error(f"📊 {len(estado_anterior)} chats perdidos!")
-                    logger.error(f"Chats perdidos: {list(estado_anterior.keys())}")
-                    # Restaura os dados
-                    romaneios_por_grupo.update(estado_anterior)
-                    logger.info(f"✅ Dados restaurados: {len(romaneios_por_grupo)} chats")
-                elif estado_anterior:
-                    # Verifica se algum chat sumiu
-                    chats_atuais = set(romaneios_por_grupo.keys())
-                    chats_anteriores = set(estado_anterior.keys())
-                    chats_perdidos = chats_anteriores - chats_atuais
-                    if chats_perdidos:
-                        logger.warning(f"⚠️ Chats perdidos em {func.__name__}: {chats_perdidos}")
-            
+                id_atual = id(romaneios_por_grupo)
+                tamanho_atual = len(romaneios_por_grupo)
+                
+                # CASO 1: ID mudou (dicionário foi recriado)
+                if id_atual != id_anterior:
+                    logger.error(f"🚨🚨🚨 DICIONÁRIO RECRIADO em {func.__name__}!")
+                    logger.error(f"ID anterior: {id_anterior}, ID novo: {id_atual}")
+                    if estado_anterior:
+                        logger.error(f"Restaurando {len(estado_anterior)} chats perdidos")
+                        romaneios_por_grupo.clear()
+                        romaneios_por_grupo.update(estado_anterior)
+                        logger.info(f"✅ Restauração concluída. Agora: {len(romaneios_por_grupo)} chats")
+                
+                # CASO 2: ID é o mesmo mas perdeu todos os dados
+                elif tamanho_atual == 0 and tamanho_anterior > 0:
+                    logger.error(f"🚨 TODOS OS DADOS PERDIDOS em {func.__name__}!")
+                    logger.error(f"Tinha {tamanho_anterior} chats, agora tem 0")
+                    if estado_anterior:
+                        logger.error(f"Restaurando {len(estado_anterior)} chats")
+                        romaneios_por_grupo.clear()
+                        romaneios_por_grupo.update(estado_anterior)
+                        logger.info(f"✅ Restauração concluída. Agora: {len(romaneios_por_grupo)} chats")
+                
+                # CASO 3: Perdeu alguns dados
+                elif tamanho_atual < tamanho_anterior:
+                    logger.warning(f"⚠️ Perda parcial de dados em {func.__name__}")
+                    logger.warning(f"Tinha {tamanho_anterior}, agora tem {tamanho_atual}")
+                    perdidos = set(estado_anterior.keys()) - set(romaneios_por_grupo.keys())
+                    logger.warning(f"Chats perdidos: {perdidos}")
+                
+                # CASO 4: Tudo normal
+                elif tamanho_atual > tamanho_anterior:
+                    logger.info(f"📊 {func.__name__}: {tamanho_anterior} -> {tamanho_atual} chats (crescimento)")
+                
             return resultado
         except Exception as e:
             logger.error(f"Erro em {func.__name__}: {e}")
+            logger.error(traceback.format_exc())
             raise
     return wrapper
 
@@ -339,9 +363,9 @@ def processar_mensagem(update):
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS COM PROTEÇÃO TOTAL =====
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS COM MONITORAMENTO =====
 def verificar_alertas():
-    """Thread principal que verifica e envia alertas - VERSÃO COM PROTEÇÃO TOTAL"""
+    """Thread principal que verifica e envia alertas"""
     logger.info("🔄 Thread de verificação de alertas iniciada")
     contador = 0
     
@@ -350,18 +374,17 @@ def verificar_alertas():
             contador += 1
             agora = datetime.now(br_tz)
             
+            # MONITOR: salva estado antes
+            with lock:
+                estado_antes = dict(romaneios_por_grupo)
+                id_antes = id(romaneios_por_grupo)
+                logger.info(f"📊 ANTES da iteração #{contador}: {len(estado_antes)} chats, ID: {id_antes}")
+            
             # PROTEÇÃO: verifica se o dicionário principal ainda existe
             if 'romaneios_por_grupo' not in globals():
                 logger.error("🔥 DICIONÁRIO GLOBAL PERDIDO! Recriando...")
                 global romaneios_por_grupo
                 romaneios_por_grupo = {}
-            
-            # MONITORAMENTO DE INTEGRIDADE
-            with lock:
-                if not isinstance(romaneios_por_grupo, dict):
-                    logger.error(f"🔥 romaneios_por_grupo não é mais um dicionário!")
-                    logger.error(f"Tipo: {type(romaneios_por_grupo)}")
-                    romaneios_por_grupo = {}
             
             # CRIA UMA CÓPIA DA LISTA DE CHATS
             chats_para_verificar = []
@@ -473,6 +496,29 @@ def verificar_alertas():
                                                 r_original['ultimo_alerta'] = agora
                                                 logger.info(f"✅ Alerta final registrado para {cliente}")
             
+            # MONITOR: verifica depois
+            with lock:
+                estado_depois = dict(romaneios_por_grupo)
+                id_depois = id(romaneios_por_grupo)
+                
+                if id_depois != id_antes:
+                    logger.error(f"🔥 ID DO DICIONÁRIO MUDOU na iteração #{contador}!")
+                    logger.error(f"ID antes: {id_antes}, ID depois: {id_depois}")
+                    if estado_antes:
+                        logger.error(f"Restaurando {len(estado_antes)} chats")
+                        romaneios_por_grupo.clear()
+                        romaneios_por_grupo.update(estado_antes)
+                
+                elif len(estado_depois) < len(estado_antes):
+                    perdidos = set(estado_antes.keys()) - set(estado_depois.keys())
+                    logger.error(f"🔥 DADOS PERDIDOS na iteração #{contador}!")
+                    logger.error(f"Tinha {len(estado_antes)} chats, agora tem {len(estado_depois)}")
+                    logger.error(f"Chats perdidos: {perdidos}")
+                    if estado_antes:
+                        logger.error(f"Restaurando...")
+                        romaneios_por_grupo.clear()
+                        romaneios_por_grupo.update(estado_antes)
+            
         except Exception as e:
             logger.error(f"🔥 ERRO na verificação: {e}")
             logger.error(traceback.format_exc())
@@ -550,6 +596,7 @@ def home():
     return f"🤖 Bot de Romaneios rodando! 🚀\n🇧🇷 Horário BR: {agora_br}", 200
 
 @app.route("/webhook", methods=["POST"])
+@proteger_dicionario
 def webhook():
     """Endpoint para receber atualizações do Telegram"""
     try:
