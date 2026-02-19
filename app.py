@@ -44,6 +44,40 @@ else:
 romaneios_por_grupo = {}
 lock = threading.Lock()
 
+# ===== SISTEMA DE PROTEÇÃO CONTRA RESET =====
+def proteger_dicionario(func):
+    """Decorador que protege o dicionário contra resets acidentais"""
+    def wrapper(*args, **kwargs):
+        global romaneios_por_grupo
+        # Salva o estado antes
+        estado_anterior = dict(romaneios_por_grupo) if romaneios_por_grupo else {}
+        
+        try:
+            resultado = func(*args, **kwargs)
+            
+            # Verifica se o dicionário foi resetado
+            with lock:
+                if not romaneios_por_grupo and estado_anterior:
+                    logger.error(f"🚨 RESET DETECTADO NA FUNÇÃO {func.__name__}!")
+                    logger.error(f"📊 {len(estado_anterior)} chats perdidos!")
+                    logger.error(f"Chats perdidos: {list(estado_anterior.keys())}")
+                    # Restaura os dados
+                    romaneios_por_grupo.update(estado_anterior)
+                    logger.info(f"✅ Dados restaurados: {len(romaneios_por_grupo)} chats")
+                elif estado_anterior:
+                    # Verifica se algum chat sumiu
+                    chats_atuais = set(romaneios_por_grupo.keys())
+                    chats_anteriores = set(estado_anterior.keys())
+                    chats_perdidos = chats_anteriores - chats_atuais
+                    if chats_perdidos:
+                        logger.warning(f"⚠️ Chats perdidos em {func.__name__}: {chats_perdidos}")
+            
+            return resultado
+        except Exception as e:
+            logger.error(f"Erro em {func.__name__}: {e}")
+            raise
+    return wrapper
+
 # ===== FUNÇÕES DO TELEGRAM =====
 def enviar_mensagem(chat_id, texto):
     """Envia mensagem para um chat específico do Telegram"""
@@ -102,6 +136,7 @@ def enviar_alerta(romaneio, chat_id, cliente, minutos_restantes):
     return resultado
 
 # ===== PROCESSAMENTO DE COMANDOS =====
+@proteger_dicionario
 def processar_comando_romaneio(texto, chat_id, message_id):
     """Processa o comando /romaneio com horário BR"""
     padrao = r'^/romaneio\s+([a-zA-Z0-9]+)\s+(\d{1,2}:\d{2})$'
@@ -165,6 +200,8 @@ def processar_comando_romaneio(texto, chat_id, message_id):
             romaneios_por_grupo[chat_id] = []
         romaneios_por_grupo[chat_id].append(romaneio)
         logger.info(f"📦 Romaneio adicionado. Chat {chat_id} agora tem {len(romaneios_por_grupo[chat_id])} romaneios")
+        logger.info(f"🔍 ESTADO PÓS-REGISTRO: chats ativos = {list(romaneios_por_grupo.keys())}")
+        logger.info(f"🆔 ID do dicionário após registro: {id(romaneios_por_grupo)}")
     
     # Mensagem de confirmação com horário BR
     resposta = (
@@ -178,6 +215,7 @@ def processar_comando_romaneio(texto, chat_id, message_id):
     enviar_mensagem(chat_id, resposta)
     logger.info(f"✅ Romaneio registrado: {cliente} às {horario_str} BR no grupo {chat_id}")
 
+@proteger_dicionario
 def processar_mensagem(update):
     """Processa uma mensagem recebida"""
     try:
@@ -191,6 +229,10 @@ def processar_mensagem(update):
         
         logger.info(f"📨 Mensagem de {chat_id}: {text}")
         logger.info(f"🔍 CHAT_ID recebido: {chat_id} (tipo: {type(chat_id)})")
+        
+        with lock:
+            logger.info(f"🔍 ESTADO ANTES DO PROCESSAMENTO: chats = {list(romaneios_por_grupo.keys())}")
+            logger.info(f"🆔 ID do dicionário antes: {id(romaneios_por_grupo)}")
         
         if text == '/start':
             enviar_mensagem(chat_id, 
@@ -214,6 +256,7 @@ def processar_mensagem(update):
             with lock:
                 msg = "🔍 <b>DEBUG INFO</b>\n\n"
                 msg += f"TOTAL CHATS: {len(romaneios_por_grupo)}\n"
+                msg += f"ID DO DICIONÁRIO: {id(romaneios_por_grupo)}\n"
                 for cid, roms in romaneios_por_grupo.items():
                     msg += f"\nCHAT - {cid}:\n"
                     for r in roms:
@@ -287,14 +330,18 @@ def processar_mensagem(update):
         
         else:
             enviar_mensagem(chat_id, f"Comando não reconhecido. Envie /ajuda para ver os comandos disponíveis.")
+        
+        with lock:
+            logger.info(f"🔍 ESTADO DEPOIS DO PROCESSAMENTO: chats = {list(romaneios_por_grupo.keys())}")
+            logger.info(f"🆔 ID do dicionário depois: {id(romaneios_por_grupo)}")
             
     except Exception as e:
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS CORRIGIDA (COM LIMPEZA COMENTADA) =====
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS COM PROTEÇÃO TOTAL =====
 def verificar_alertas():
-    """Thread principal que verifica e envia alertas"""
+    """Thread principal que verifica e envia alertas - VERSÃO COM PROTEÇÃO TOTAL"""
     logger.info("🔄 Thread de verificação de alertas iniciada")
     contador = 0
     
@@ -303,12 +350,29 @@ def verificar_alertas():
             contador += 1
             agora = datetime.now(br_tz)
             
+            # PROTEÇÃO: verifica se o dicionário principal ainda existe
+            if 'romaneios_por_grupo' not in globals():
+                logger.error("🔥 DICIONÁRIO GLOBAL PERDIDO! Recriando...")
+                global romaneios_por_grupo
+                romaneios_por_grupo = {}
+            
+            # MONITORAMENTO DE INTEGRIDADE
+            with lock:
+                if not isinstance(romaneios_por_grupo, dict):
+                    logger.error(f"🔥 romaneios_por_grupo não é mais um dicionário!")
+                    logger.error(f"Tipo: {type(romaneios_por_grupo)}")
+                    romaneios_por_grupo = {}
+            
             # CRIA UMA CÓPIA DA LISTA DE CHATS
             chats_para_verificar = []
             
             with lock:
+                # LOG DO ID DO DICIONÁRIO PARA DETECTAR RESET
+                logger.info(f"🆔 ID do dicionário na verificação: {id(romaneios_por_grupo)}")
                 logger.info(f"📊 DENTRO DO LOCK - Total de chats: {len(romaneios_por_grupo)}")
-                for chat_id, romaneios in romaneios_por_grupo.items():
+                
+                # LISTA TODOS OS CHATS PARA DEBUG
+                for chat_id, romaneios in list(romaneios_por_grupo.items()):
                     logger.info(f"  Chat {chat_id} tem {len(romaneios)} romaneios")
                     
                     romaneios_copia = []
@@ -326,7 +390,7 @@ def verificar_alertas():
             
             # AGORA VERIFICA FORA DO LOCK
             logger.info(f"⏰ [VERIFICAÇÃO #{contador}] Executando em {agora.strftime('%H:%M:%S')}")
-            logger.info(f"📊 Total de chats com romaneios: {len(chats_para_verificar)}")
+            logger.info(f"📊 Total de chats com romaneios (cópia): {len(chats_para_verificar)}")
             
             if not chats_para_verificar:
                 logger.info("💤 Nenhum romaneio ativo no momento")
@@ -358,10 +422,12 @@ def verificar_alertas():
                             enviar_mensagem(chat_id, mensagem)
                             
                             with lock:
-                                for r_original in romaneios_por_grupo.get(chat_id, []):
-                                    if r_original['cliente'] == cliente and r_original['ativo']:
-                                        r_original['ativo'] = False
-                                        logger.info(f"✅ {cliente} marcado como inativo")
+                                # Verifica se o chat ainda existe
+                                if chat_id in romaneios_por_grupo:
+                                    for r_original in romaneios_por_grupo[chat_id]:
+                                        if r_original['cliente'] == cliente and r_original['ativo']:
+                                            r_original['ativo'] = False
+                                            logger.info(f"✅ {cliente} marcado como inativo")
                             continue
                         
                         # PRIMEIRO ALERTA
@@ -370,11 +436,12 @@ def verificar_alertas():
                             enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
                             
                             with lock:
-                                for r_original in romaneios_por_grupo.get(chat_id, []):
-                                    if r_original['cliente'] == cliente and r_original['ativo']:
-                                        r_original['alertas_enviados'] = minutos_restantes
-                                        r_original['ultimo_alerta'] = agora
-                                        logger.info(f"✅ Primeiro alerta registrado para {cliente}")
+                                if chat_id in romaneios_por_grupo:
+                                    for r_original in romaneios_por_grupo[chat_id]:
+                                        if r_original['cliente'] == cliente and r_original['ativo']:
+                                            r_original['alertas_enviados'] = minutos_restantes
+                                            r_original['ultimo_alerta'] = agora
+                                            logger.info(f"✅ Primeiro alerta registrado para {cliente}")
                         
                         # ALERTAS SUBSEQUENTES
                         elif romaneio['alertas_enviados'] > 0:
@@ -386,11 +453,12 @@ def verificar_alertas():
                                 enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
                                 
                                 with lock:
-                                    for r_original in romaneios_por_grupo.get(chat_id, []):
-                                        if r_original['cliente'] == cliente and r_original['ativo']:
-                                            r_original['alertas_enviados'] = minutos_restantes
-                                            r_original['ultimo_alerta'] = agora
-                                            logger.info(f"✅ Alerta de 15 min registrado para {cliente}")
+                                    if chat_id in romaneios_por_grupo:
+                                        for r_original in romaneios_por_grupo[chat_id]:
+                                            if r_original['cliente'] == cliente and r_original['ativo']:
+                                                r_original['alertas_enviados'] = minutos_restantes
+                                                r_original['ultimo_alerta'] = agora
+                                                logger.info(f"✅ Alerta de 15 min registrado para {cliente}")
                             
                             # Alerta final
                             elif minutos_restantes <= 5 and romaneio['alertas_enviados'] > 5:
@@ -398,26 +466,12 @@ def verificar_alertas():
                                 enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
                                 
                                 with lock:
-                                    for r_original in romaneios_por_grupo.get(chat_id, []):
-                                        if r_original['cliente'] == cliente and r_original['ativo']:
-                                            r_original['alertas_enviados'] = minutos_restantes
-                                            r_original['ultimo_alerta'] = agora
-                                            logger.info(f"✅ Alerta final registrado para {cliente}")
-            
-            # ===== LIMPEZA AUTOMÁTICA COMENTADA PARA TESTE =====
-            # with lock:
-            #     for chat_id, romaneios in list(romaneios_por_grupo.items()):
-            #         ativos = [r for r in romaneios if r['ativo']]
-            #         if len(ativos) != len(romaneios):
-            #             logger.info(f"🧹 Chat {chat_id}: {len(romaneios) - len(ativos)} romaneios inativos serão removidos")
-            #         
-            #         romaneios_por_grupo[chat_id] = [
-            #             r for r in romaneios 
-            #             if r['ativo'] or (agora - r['criado_em']).total_seconds() < 3600
-            #         ]
-            #         if not romaneios_por_grupo[chat_id]:
-            #             del romaneios_por_grupo[chat_id]
-            #             logger.info(f"🧹 Chat {chat_id} removido - sem romaneios")
+                                    if chat_id in romaneios_por_grupo:
+                                        for r_original in romaneios_por_grupo[chat_id]:
+                                            if r_original['cliente'] == cliente and r_original['ativo']:
+                                                r_original['alertas_enviados'] = minutos_restantes
+                                                r_original['ultimo_alerta'] = agora
+                                                logger.info(f"✅ Alerta final registrado para {cliente}")
             
         except Exception as e:
             logger.error(f"🔥 ERRO na verificação: {e}")
@@ -434,6 +488,9 @@ def forcar_verificacao():
         agora = datetime.now(br_tz)
         
         with lock:
+            logger.info(f"🆔 ID do dicionário (manual): {id(romaneios_por_grupo)}")
+            logger.info(f"📊 Chats ativos (manual): {list(romaneios_por_grupo.keys())}")
+            
             for chat_id, romaneios in list(romaneios_por_grupo.items()):
                 for romaneio in romaneios[:]:
                     if not romaneio['ativo']:
@@ -457,6 +514,7 @@ def estado():
     with lock:
         info = {
             "total_chats": len(romaneios_por_grupo),
+            "id_dicionario": id(romaneios_por_grupo),
             "chats": {}
         }
         for chat_id, romaneios in romaneios_por_grupo.items():
@@ -471,6 +529,19 @@ def estado():
                 for r in romaneios
             ]
     return jsonify(info), 200
+
+# ===== ROTA PARA MONITORAR INTEGRIDADE =====
+@app.route("/integridade", methods=["GET"])
+def integridade():
+    """Endpoint para monitorar a integridade do dicionário"""
+    with lock:
+        return jsonify({
+            "dicionario_existe": 'romaneios_por_grupo' in globals(),
+            "tipo": str(type(romaneios_por_grupo)),
+            "id": id(romaneios_por_grupo),
+            "total_chats": len(romaneios_por_grupo),
+            "chats": list(romaneios_por_grupo.keys())
+        }), 200
 
 # ===== ROTAS DO FLASK =====
 @app.route("/")
@@ -487,6 +558,11 @@ def webhook():
         logger.info("="*50)
         logger.info("📩 MENSAGEM RECEBIDA DO TELEGRAM")
         logger.info(f"Conteúdo: {update}")
+        
+        with lock:
+            logger.info(f"🔍 ESTADO NO WEBHOOK ANTES: chats = {list(romaneios_por_grupo.keys())}")
+            logger.info(f"🆔 ID do dicionário no webhook: {id(romaneios_por_grupo)}")
+        
         logger.info("="*50)
         
         if update:
@@ -530,6 +606,8 @@ def api_testar():
 if TOKEN:
     threading.Thread(target=verificar_alertas, daemon=True).start()
     logger.info("✅ Sistema iniciado com sucesso!")
+    with lock:
+        logger.info(f"🆔 ID inicial do dicionário: {id(romaneios_por_grupo)}")
 else:
     logger.error("🚨 BOT NÃO INICIADO - Token não configurado!")
 
