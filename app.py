@@ -14,21 +14,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ===== CRIAÇÃO DO APP FLASK (TEM QUE SER AQUI!) =====
+# ===== CRIAÇÃO DO APP FLASK =====
 app = Flask(__name__)
 
 # ===== CONFIGURAÇÕES =====
-# Token do bot (configurado nas variáveis de ambiente do Render)
 TOKEN = os.environ.get("TOKEN")
 if not TOKEN:
     logger.error("🚨 TOKEN NÃO CONFIGURADO!")
 else:
     logger.info("✅ TOKEN configurado com sucesso!")
 
-# URL da API do Telegram
 TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}"
 
-# IDs dos grupos para alertas automáticos (opcional)
 CHAT_IDS = os.environ.get("CHAT_IDS", "")
 if CHAT_IDS:
     CHAT_IDS = [chat_id.strip() for chat_id in CHAT_IDS.split(",") if chat_id.strip()]
@@ -38,8 +35,6 @@ else:
     logger.info("ℹ️ Nenhum grupo configurado para alertas automáticos")
 
 # ===== ESTRUTURA DE DADOS =====
-# Dicionário para armazenar os romaneios por grupo
-# Estrutura: { chat_id: [romaneios] }
 romaneios_por_grupo = {}
 lock = threading.Lock()
 
@@ -71,11 +66,31 @@ def enviar_para_todos(texto):
     for chat_id in CHAT_IDS:
         enviar_mensagem(chat_id, texto)
 
+# ===== FUNÇÃO DE ALERTA =====
+def enviar_alerta(romaneio, chat_id, cliente, minutos_restantes):
+    """Função auxiliar para enviar alertas formatados"""
+    if minutos_restantes <= 1:
+        msg_alerta = f"🔥 <b>SAIR AGORA! ÚLTIMO MINUTO!</b> 🔥"
+    elif minutos_restantes <= 5:
+        msg_alerta = f"🔥 <b>ÚLTIMOS {minutos_restantes} MINUTOS! SAIR AGORA!</b> 🔥"
+    elif minutos_restantes <= 15:
+        msg_alerta = f"⚠️ <b>FALTAM {minutos_restantes} MINUTOS! PREPARAR PARA SAÍDA!</b>"
+    else:
+        msg_alerta = f"⚡ <b>FALTAM {minutos_restantes} MINUTOS PARA O HORÁRIO LIMITE</b>"
+    
+    mensagem = (
+        f"🚨 <b>ALERTA DE SAÍDA</b> 🚨\n\n"
+        f"📦 <b>Cliente:</b> {cliente}\n"
+        f"⏰ <b>Horário limite:</b> {romaneio['horario']}\n"
+        f"⏳ <b>Tempo restante:</b> {minutos_restantes} minutos\n\n"
+        f"{msg_alerta}"
+    )
+    enviar_mensagem(chat_id, mensagem)
+    logger.info(f"✅ Alerta enviado para {cliente} - faltam {minutos_restantes} min")
+
 # ===== PROCESSAMENTO DE COMANDOS =====
 def processar_comando_romaneio(texto, chat_id, message_id):
     """Processa o comando /romaneio"""
-    # Padrão: /romaneio [cliente] [horario]
-    # Exemplo: /romaneio honda 15:00
     padrao = r'^/romaneio\s+([a-zA-Z0-9]+)\s+(\d{1,2}:\d{2})$'
     match = re.match(padrao, texto.strip())
     
@@ -90,7 +105,6 @@ def processar_comando_romaneio(texto, chat_id, message_id):
     cliente = match.group(1).upper()
     horario_str = match.group(2)
     
-    # Validar horário
     try:
         hora, minuto = map(int, horario_str.split(':'))
         if hora < 0 or hora > 23 or minuto < 0 or minuto > 59:
@@ -99,7 +113,6 @@ def processar_comando_romaneio(texto, chat_id, message_id):
         agora = datetime.now()
         horario_obj = agora.replace(hour=hora, minute=minuto, second=0, microsecond=0)
         
-        # Se já passou, agenda para amanhã
         if horario_obj < agora:
             horario_obj = horario_obj + timedelta(days=1)
             
@@ -108,11 +121,9 @@ def processar_comando_romaneio(texto, chat_id, message_id):
         logger.error(f"Erro no horário: {e}")
         return
     
-    # Calcular tempo até o horário
     agora = datetime.now()
     minutos_restantes = int((horario_obj - agora).total_seconds() / 60)
     
-    # Criar novo romaneio
     romaneio = {
         'cliente': cliente,
         'horario': horario_str,
@@ -130,7 +141,6 @@ def processar_comando_romaneio(texto, chat_id, message_id):
             romaneios_por_grupo[chat_id] = []
         romaneios_por_grupo[chat_id].append(romaneio)
     
-    # Mensagem de confirmação
     resposta = (
         f"✅ <b>ROMANEIO REGISTRADO</b>\n\n"
         f"📦 <b>Cliente:</b> {cliente}\n"
@@ -139,7 +149,6 @@ def processar_comando_romaneio(texto, chat_id, message_id):
         f"⚠️ <i>Alertas serão enviados a cada 15 minutos</i>"
     )
     enviar_mensagem(chat_id, resposta)
-    
     logger.info(f"✅ Romaneio registrado: {cliente} às {horario_str} no grupo {chat_id}")
 
 def processar_mensagem(update):
@@ -155,7 +164,6 @@ def processar_mensagem(update):
         
         logger.info(f"📨 Mensagem de {chat_id}: {text}")
         
-        # Comando /start
         if text == '/start':
             enviar_mensagem(chat_id, 
                 "🤖 <b>Bot de Romaneios</b>\n\n"
@@ -168,15 +176,12 @@ def processar_mensagem(update):
                 "🏓 <b>/ping</b> - Testar bot"
             )
         
-        # Comando /ping (teste)
         elif text == '/ping':
             enviar_mensagem(chat_id, "pong 🏓")
         
-        # Comando /romaneio
         elif text.startswith('/romaneio'):
             processar_comando_romaneio(text, chat_id, message_id)
         
-        # Comando /listar
         elif text == '/listar':
             with lock:
                 if chat_id in romaneios_por_grupo and romaneios_por_grupo[chat_id]:
@@ -188,7 +193,6 @@ def processar_mensagem(update):
                 else:
                     enviar_mensagem(chat_id, "✅ Nenhum romaneio ativo no momento")
         
-        # Comando /cancelar
         elif text.startswith('/cancelar'):
             cliente = text.replace('/cancelar', '').strip().upper()
             if not cliente:
@@ -207,7 +211,6 @@ def processar_mensagem(update):
                 if not encontrou:
                     enviar_mensagem(chat_id, f"❌ Romaneio da {cliente} não encontrado")
         
-        # Comando /ajuda
         elif text == '/ajuda':
             enviar_mensagem(chat_id,
                 "🆘 <b>AJUDA</b>\n\n"
@@ -223,16 +226,15 @@ def processar_mensagem(update):
                 "⚠️ Alertas automáticos a cada 15 minutos"
             )
         
-        # Mensagem não reconhecida (só para teste)
         else:
             enviar_mensagem(chat_id, f"Comando não reconhecido. Envie /ajuda para ver os comandos disponíveis.")
             
     except Exception as e:
         logger.error(f"Erro ao processar mensagem: {e}")
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS =====
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS (CORRIGIDA) =====
 def verificar_alertas():
-    """Thread principal que verifica e envia alertas"""
+    """Thread principal que verifica e envia alertas a cada 15 minutos"""
     logger.info("🔄 Thread de verificação de alertas iniciada")
     
     while True:
@@ -241,7 +243,7 @@ def verificar_alertas():
             
             with lock:
                 for chat_id, romaneios in list(romaneios_por_grupo.items()):
-                    for romaneio in romaneios[:]:  # Cópia para iteração segura
+                    for romaneio in romaneios[:]:
                         if not romaneio['ativo']:
                             continue
                         
@@ -260,42 +262,41 @@ def verificar_alertas():
                             romaneio['ativo'] = False
                             continue
                         
-                        # Calcular minutos até o horário
+                        # Calcular minutos restantes
                         minutos_restantes = int((horario - agora).total_seconds() / 60)
                         
-                        # Alertas nos minutos específicos
-                        minutos_para_alerta = [60, 45, 30, 15, 5, 1]
+                        # PRIMEIRO ALERTA: quando faltam 60 minutos ou menos
+                        if romaneio['alertas_enviados'] == 0 and minutos_restantes <= 60:
+                            enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
+                            romaneio['alertas_enviados'] = minutos_restantes
+                            romaneio['ultimo_alerta'] = agora
+                            logger.info(f"📊 Primeiro alerta para {cliente}: faltam {minutos_restantes} min")
                         
-                        for minutos in minutos_para_alerta:
-                            if minutos_restantes <= minutos and romaneio['alertas_enviados'] < minutos:
-                                # Evita enviar múltiplos alertas no mesmo minuto
-                                tempo_desde_ultimo = (agora - romaneio['ultimo_alerta']).total_seconds() / 60
-                                if tempo_desde_ultimo >= 1:
-                                    if minutos_restantes <= 1:
-                                        msg_alerta = f"🔥 <b>SAIR AGORA! ÚLTIMO MINUTO!</b> 🔥"
-                                    elif minutos_restantes <= 5:
-                                        msg_alerta = f"🔥 <b>ÚLTIMOS {minutos_restantes} MINUTOS! SAIR AGORA!</b> 🔥"
-                                    elif minutos_restantes <= 15:
-                                        msg_alerta = f"⚠️ <b>FALTAM {minutos_restantes} MINUTOS! PREPARAR PARA SAÍDA!</b>"
-                                    else:
-                                        msg_alerta = f"⚡ <b>FALTAM {minutos_restantes} MINUTOS</b>"
-                                    
-                                    mensagem = (
-                                        f"🚨 <b>ALERTA DE SAÍDA</b> 🚨\n\n"
-                                        f"📦 <b>Cliente:</b> {cliente}\n"
-                                        f"⏰ <b>Horário limite:</b> {romaneio['horario']}\n"
-                                        f"⏳ <b>Tempo restante:</b> {minutos_restantes} minutos\n\n"
-                                        f"{msg_alerta}"
-                                    )
-                                    enviar_mensagem(chat_id, mensagem)
+                        # ALERTAS SUBSEQUENTES: a cada 15 minutos
+                        elif romaneio['alertas_enviados'] > 0:
+                            # Minutos desde o último alerta
+                            minutos_desde_ultimo = int((agora - romaneio['ultimo_alerta']).total_seconds() / 60)
+                            
+                            # Se passaram 15 minutos ou mais E ainda faltam mais de 5 minutos
+                            if minutos_desde_ultimo >= 15 and minutos_restantes > 5:
+                                # Evita alertas repetidos no mesmo minuto
+                                if abs(minutos_restantes - romaneio['alertas_enviados']) >= 10:
+                                    enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
+                                    romaneio['alertas_enviados'] = minutos_restantes
                                     romaneio['ultimo_alerta'] = agora
-                                    romaneio['alertas_enviados'] = minutos
-                                    break
+                                    logger.info(f"📊 Alerta de 15 min para {cliente}: faltam {minutos_restantes} min")
+                            
+                            # ALERTA FINAL: quando faltam 5 minutos ou menos
+                            elif minutos_restantes <= 5 and romaneio['alertas_enviados'] > 5:
+                                enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
+                                romaneio['alertas_enviados'] = minutos_restantes
+                                romaneio['ultimo_alerta'] = agora
+                                logger.info(f"🔥 Alerta final para {cliente}: faltam {minutos_restantes} min")
                         
         except Exception as e:
             logger.error(f"Erro na verificação de alertas: {e}")
         
-        time.sleep(15)  # Verifica a cada 15 segundos
+        time.sleep(30)  # Verifica a cada 30 segundos
 
 # ===== ROTAS DO FLASK =====
 @app.route("/")
@@ -306,16 +307,13 @@ def home():
 def webhook():
     """Endpoint para receber atualizações do Telegram"""
     try:
-        # Pega os dados recebidos
         update = request.get_json()
         
-        # Log da mensagem recebida
         logger.info("="*50)
         logger.info("📩 MENSAGEM RECEBIDA DO TELEGRAM")
         logger.info(f"Conteúdo: {update}")
         logger.info("="*50)
         
-        # Processa a mensagem em uma thread separada para não travar o webhook
         if update:
             threading.Thread(target=processar_mensagem, args=(update,)).start()
         
@@ -341,7 +339,6 @@ def api_testar():
     """Endpoint para testar o envio de alertas"""
     mensagem = "🧪 <b>ALERTA DE TESTE</b>\n\nSistema de notificações funcionando corretamente!"
     
-    # Envia para todos os grupos configurados
     for chat_id in CHAT_IDS:
         enviar_mensagem(chat_id, mensagem)
     
@@ -351,7 +348,6 @@ def api_testar():
     }), 200
 
 # ===== INICIALIZAÇÃO =====
-# Inicia a thread de verificação se o token estiver configurado
 if TOKEN:
     threading.Thread(target=verificar_alertas, daemon=True).start()
     logger.info("✅ Sistema iniciado com sucesso!")
