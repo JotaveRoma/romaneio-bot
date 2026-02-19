@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import re
+import json
 from datetime import datetime, timedelta
 import pytz
 import logging
@@ -56,6 +57,81 @@ class DictMonitorado(dict):
 # ===== ESTRUTURA DE DADOS =====
 romaneios_por_grupo = DictMonitorado()
 lock = threading.Lock()
+
+# ===== PERSISTÊNCIA EM ARQUIVO =====
+ARQUIVO_DADOS = "dados.json"
+
+def salvar_dados():
+    """Salva os romaneios em arquivo"""
+    try:
+        with lock:
+            dados_para_salvar = {}
+            for chat_id, romaneios in romaneios_por_grupo.items():
+                dados_para_salvar[str(chat_id)] = []
+                for r in romaneios:
+                    dados_para_salvar[str(chat_id)].append({
+                        'cliente': r['cliente'],
+                        'horario': r['horario'],
+                        'horario_obj': r['horario_obj'].isoformat() if r['horario_obj'] else None,
+                        'chat_id': r['chat_id'],
+                        'message_id': r['message_id'],
+                        'criado_em': r['criado_em'].isoformat(),
+                        'ultimo_alerta': r['ultimo_alerta'].isoformat(),
+                        'alertas_enviados': r['alertas_enviados'],
+                        'ativo': r['ativo']
+                    })
+            
+            with open(ARQUIVO_DADOS, 'w') as f:
+                json.dump(dados_para_salvar, f, indent=2)
+            logger.info("💾 Dados salvos em arquivo")
+    except Exception as e:
+        logger.error(f"Erro ao salvar dados: {e}")
+
+def carregar_dados():
+    """Carrega os romaneios do arquivo"""
+    global romaneios_por_grupo
+    try:
+        if os.path.exists(ARQUIVO_DADOS):
+            with open(ARQUIVO_DADOS, 'r') as f:
+                dados_carregados = json.load(f)
+            
+            with lock:
+                romaneios_por_grupo.clear()
+                for chat_id_str, romaneios in dados_carregados.items():
+                    chat_id = int(chat_id_str)
+                    romaneios_por_grupo[chat_id] = []
+                    for r in romaneios:
+                        # Converte strings ISO para datetime com timezone
+                        horario_obj = None
+                        if r['horario_obj']:
+                            horario_obj = datetime.fromisoformat(r['horario_obj'])
+                            if horario_obj.tzinfo is None:
+                                horario_obj = br_tz.localize(horario_obj)
+                        
+                        criado_em = datetime.fromisoformat(r['criado_em'])
+                        if criado_em.tzinfo is None:
+                            criado_em = br_tz.localize(criado_em)
+                        
+                        ultimo_alerta = datetime.fromisoformat(r['ultimo_alerta'])
+                        if ultimo_alerta.tzinfo is None:
+                            ultimo_alerta = br_tz.localize(ultimo_alerta)
+                        
+                        romaneios_por_grupo[chat_id].append({
+                            'cliente': r['cliente'],
+                            'horario': r['horario'],
+                            'horario_obj': horario_obj,
+                            'chat_id': r['chat_id'],
+                            'message_id': r['message_id'],
+                            'criado_em': criado_em,
+                            'ultimo_alerta': ultimo_alerta,
+                            'alertas_enviados': r['alertas_enviados'],
+                            'ativo': r['ativo']
+                        })
+            logger.info(f"📂 Dados carregados: {len(romaneios_por_grupo)} chats")
+            return True
+    except Exception as e:
+        logger.error(f"Erro ao carregar dados: {e}")
+        return False
 
 # ===== SISTEMA DE PROTEÇÃO CONTRA RESET MELHORADO =====
 def proteger_dicionario(func):
@@ -251,6 +327,9 @@ def processar_comando_romaneio(texto, chat_id, message_id):
     )
     enviar_mensagem(chat_id, resposta)
     logger.info(f"✅ Romaneio registrado: {cliente} às {horario_str} BR no grupo {chat_id}")
+    
+    # Salva dados após registro
+    salvar_dados()
 
 @proteger_dicionario
 def processar_mensagem(update):
@@ -324,6 +403,7 @@ def processar_mensagem(update):
                     if not romaneios_por_grupo[chat_id]:
                         del romaneios_por_grupo[chat_id]
                     enviar_mensagem(chat_id, "🧹 Romaneios antigos limpos com sucesso!")
+                    salvar_dados()
                 else:
                     enviar_mensagem(chat_id, "✅ Nenhum romaneio para limpar")
         
@@ -341,6 +421,7 @@ def processar_mensagem(update):
                             r['ativo'] = False
                             enviar_mensagem(chat_id, f"✅ Romaneio da {cliente} cancelado!")
                             encontrou = True
+                            salvar_dados()
                             break
                 if not encontrou:
                     enviar_mensagem(chat_id, f"❌ Romaneio da {cliente} não encontrado")
@@ -376,41 +457,10 @@ def processar_mensagem(update):
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS COM MONITOR ULTRA SENSÍVEL =====
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS =====
 def verificar_alertas():
     """Thread principal que verifica e envia alertas"""
     logger.info("🔄 Thread de verificação de alertas iniciada")
-    
-    # ===== MONITOR ULTRA SENSÍVEL =====
-    ultimo_estado = {}
-    
-    def monitor_mudancas():
-        """Monitora mudanças no dicionário a cada 2 segundos"""
-        nonlocal ultimo_estado
-        while True:
-            time.sleep(2)
-            with lock:
-                estado_atual = dict(romaneios_por_grupo)
-                if str(estado_atual) != str(ultimo_estado):
-                    if not ultimo_estado and estado_atual:
-                        logger.info(f"🟢 DADOS ADICIONADOS: {list(estado_atual.keys())}")
-                    elif ultimo_estado and not estado_atual:
-                        logger.error(f"🔴 TODOS OS DADOS PERDIDOS! Último estado: {list(ultimo_estado.keys())}")
-                        logger.error("Stack trace do momento da perda:")
-                        for line in traceback.format_stack():
-                            logger.error(f"  {line.strip()}")
-                    elif set(estado_atual.keys()) != set(ultimo_estado.keys()):
-                        perdidos = set(ultimo_estado.keys()) - set(estado_atual.keys())
-                        if perdidos:
-                            logger.error(f"🔴 CHATS PERDIDOS: {perdidos}")
-                    
-                    # Atualiza último estado
-                    ultimo_estado.clear()
-                    ultimo_estado.update(estado_atual)
-    
-    # Inicia o monitor
-    threading.Thread(target=monitor_mudancas, daemon=True).start()
-    
     contador = 0
     
     while True:
@@ -457,6 +507,7 @@ def verificar_alertas():
                                 )
                                 enviar_mensagem(chat_id, mensagem)
                                 romaneio['ativo'] = False
+                                salvar_dados()
                                 continue
                             
                             # Primeiro alerta
@@ -465,6 +516,7 @@ def verificar_alertas():
                                 enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
                                 romaneio['alertas_enviados'] = minutos_restantes
                                 romaneio['ultimo_alerta'] = agora
+                                salvar_dados()
                             
                             # Alertas subsequentes
                             elif romaneio['alertas_enviados'] > 0:
@@ -476,6 +528,7 @@ def verificar_alertas():
                                     enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
                                     romaneio['alertas_enviados'] = minutos_restantes
                                     romaneio['ultimo_alerta'] = agora
+                                    salvar_dados()
                                 
                                 # Alerta final
                                 elif minutos_restantes <= 5 and romaneio['alertas_enviados'] > 5:
@@ -483,6 +536,7 @@ def verificar_alertas():
                                     enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
                                     romaneio['alertas_enviados'] = minutos_restantes
                                     romaneio['ultimo_alerta'] = agora
+                                    salvar_dados()
             
         except Exception as e:
             logger.error(f"🔥 ERRO NA VERIFICAÇÃO: {e}")
@@ -617,10 +671,22 @@ def api_testar():
 
 # ===== INICIALIZAÇÃO =====
 if TOKEN:
+    # Carrega dados salvos
+    carregar_dados()
+    
+    # Inicia thread que SALVA dados a cada 30 segundos
+    def autosalvar():
+        while True:
+            time.sleep(30)
+            salvar_dados()
+    
+    threading.Thread(target=autosalvar, daemon=True).start()
     threading.Thread(target=verificar_alertas, daemon=True).start()
+    
     logger.info("✅ Sistema iniciado com sucesso!")
     with lock:
         logger.info(f"🆔 ID inicial do dicionário: {id(romaneios_por_grupo)}")
+        logger.info(f"📊 Chats carregados: {len(romaneios_por_grupo)}")
 else:
     logger.error("🚨 BOT NÃO INICIADO - Token não configurado!")
 
