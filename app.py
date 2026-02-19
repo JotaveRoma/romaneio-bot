@@ -44,6 +44,24 @@ else:
 romaneios_por_grupo = {}
 lock = threading.Lock()
 
+# ===== MONITOR DE CLEAR =====
+original_clear = dict.clear
+def monitored_clear(self):
+    # Verifica se é o nosso dicionário
+    if self is romaneios_por_grupo:
+        with lock:
+            conteudo_antes = dict(self)
+            logger.error("="*60)
+            logger.error("🚨🚨🚨 CLEAR DETECTADO NO DICIONÁRIO PRINCIPAL!")
+            logger.error(f"Conteúdo antes: {conteudo_antes}")
+            logger.error("Stack trace:")
+            for line in traceback.format_stack():
+                logger.error(f"  {line.strip()}")
+            logger.error("="*60)
+    return original_clear(self)
+
+dict.clear = monitored_clear
+
 # ===== SISTEMA DE PROTEÇÃO CONTRA RESET MELHORADO =====
 def proteger_dicionario(func):
     """Decorador que protege o dicionário contra resets acidentais"""
@@ -380,8 +398,6 @@ def verificar_alertas():
                 estado_antes = dict(romaneios_por_grupo)
                 id_antes = id(romaneios_por_grupo)
                 logger.info(f"📊 ANTES da iteração #{contador}: {len(estado_antes)} chats, ID: {id_antes}")
-            
-            # 🚨 VERIFICAÇÃO REMOVIDA - NÃO RESETA MAIS O DICIONÁRIO 🚨
             
             # CRIA UMA CÓPIA DA LISTA DE CHATS
             chats_para_verificar = []
