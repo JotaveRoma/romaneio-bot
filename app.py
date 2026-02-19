@@ -40,27 +40,22 @@ else:
     CHAT_IDS = []
     logger.info("ℹ️ Nenhum grupo configurado para alertas automáticos")
 
+# ===== DICIONÁRIO MONITORADO =====
+class DictMonitorado(dict):
+    """Subclasse de dict que monitora chamadas ao método clear"""
+    def clear(self):
+        logger.error("="*60)
+        logger.error("🚨🚨🚨 CLEAR DETECTADO NO DICIONÁRIO PRINCIPAL!")
+        logger.error(f"Conteúdo antes: {dict(self)}")
+        logger.error("Stack trace:")
+        for line in traceback.format_stack():
+            logger.error(f"  {line.strip()}")
+        logger.error("="*60)
+        super().clear()
+
 # ===== ESTRUTURA DE DADOS =====
-romaneios_por_grupo = {}
+romaneios_por_grupo = DictMonitorado()
 lock = threading.Lock()
-
-# ===== MONITOR DE CLEAR =====
-original_clear = dict.clear
-def monitored_clear(self):
-    # Verifica se é o nosso dicionário
-    if self is romaneios_por_grupo:
-        with lock:
-            conteudo_antes = dict(self)
-            logger.error("="*60)
-            logger.error("🚨🚨🚨 CLEAR DETECTADO NO DICIONÁRIO PRINCIPAL!")
-            logger.error(f"Conteúdo antes: {conteudo_antes}")
-            logger.error("Stack trace:")
-            for line in traceback.format_stack():
-                logger.error(f"  {line.strip()}")
-            logger.error("="*60)
-    return original_clear(self)
-
-dict.clear = monitored_clear
 
 # ===== SISTEMA DE PROTEÇÃO CONTRA RESET MELHORADO =====
 def proteger_dicionario(func):
@@ -395,7 +390,7 @@ def verificar_alertas():
             
             # MONITOR: salva estado antes
             with lock:
-                estado_antes = dict(romaneios_por_grupo)
+                estado_antes = dict(romaneios_por_grupo) if romaneios_por_grupo else {}
                 id_antes = id(romaneios_por_grupo)
                 logger.info(f"📊 ANTES da iteração #{contador}: {len(estado_antes)} chats, ID: {id_antes}")
             
@@ -511,7 +506,7 @@ def verificar_alertas():
             
             # MONITOR: verifica depois
             with lock:
-                estado_depois = dict(romaneios_por_grupo)
+                estado_depois = dict(romaneios_por_grupo) if romaneios_por_grupo else {}
                 id_depois = id(romaneios_por_grupo)
                 
                 if id_depois != id_antes:
