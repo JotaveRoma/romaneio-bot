@@ -376,10 +376,41 @@ def processar_mensagem(update):
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS ULTRA SIMPLES =====
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS COM MONITOR ULTRA SENSÍVEL =====
 def verificar_alertas():
     """Thread principal que verifica e envia alertas"""
     logger.info("🔄 Thread de verificação de alertas iniciada")
+    
+    # ===== MONITOR ULTRA SENSÍVEL =====
+    ultimo_estado = {}
+    
+    def monitor_mudancas():
+        """Monitora mudanças no dicionário a cada 2 segundos"""
+        nonlocal ultimo_estado
+        while True:
+            time.sleep(2)
+            with lock:
+                estado_atual = dict(romaneios_por_grupo)
+                if str(estado_atual) != str(ultimo_estado):
+                    if not ultimo_estado and estado_atual:
+                        logger.info(f"🟢 DADOS ADICIONADOS: {list(estado_atual.keys())}")
+                    elif ultimo_estado and not estado_atual:
+                        logger.error(f"🔴 TODOS OS DADOS PERDIDOS! Último estado: {list(ultimo_estado.keys())}")
+                        logger.error("Stack trace do momento da perda:")
+                        for line in traceback.format_stack():
+                            logger.error(f"  {line.strip()}")
+                    elif set(estado_atual.keys()) != set(ultimo_estado.keys()):
+                        perdidos = set(ultimo_estado.keys()) - set(estado_atual.keys())
+                        if perdidos:
+                            logger.error(f"🔴 CHATS PERDIDOS: {perdidos}")
+                    
+                    # Atualiza último estado
+                    ultimo_estado.clear()
+                    ultimo_estado.update(estado_atual)
+    
+    # Inicia o monitor
+    threading.Thread(target=monitor_mudancas, daemon=True).start()
+    
     contador = 0
     
     while True:
