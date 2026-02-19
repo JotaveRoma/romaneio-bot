@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta
 import pytz
 import logging
+import traceback
 
 # Configuração de logging
 logging.basicConfig(
@@ -43,24 +44,6 @@ else:
 romaneios_por_grupo = {}
 lock = threading.Lock()
 
-# ===== SISTEMA ANTI-SONO =====
-def manter_acordado():
-    """Thread que mantém o bot acordado pingando a si mesmo"""
-    logger.info("💤 SISTEMA ANTI-SONO ATIVADO - O bot não vai mais dormir!")
-    
-    while True:
-        try:
-            # Pings a cada 10 minutos
-            time.sleep(600)  # 10 minutos = 600 segundos
-            
-            # Ping no próprio servidor
-            url = "https://romaneio-bot.onrender.com/"
-            response = requests.get(url, timeout=30)
-            logger.info(f"⏰ Ping anti-sono: {response.status_code}")
-            
-        except Exception as e:
-            logger.error(f"❌ Erro no anti-sono: {e}")
-
 # ===== FUNÇÕES DO TELEGRAM =====
 def enviar_mensagem(chat_id, texto):
     """Envia mensagem para um chat específico do Telegram"""
@@ -92,6 +75,8 @@ def enviar_para_todos(texto):
 # ===== FUNÇÃO DE ALERTA =====
 def enviar_alerta(romaneio, chat_id, cliente, minutos_restantes):
     """Função auxiliar para enviar alertas formatados"""
+    logger.info(f"🔥 FUNÇÃO ENVIAR_ALERTA CHAMADA para {cliente} - minutos: {minutos_restantes}")
+    
     if minutos_restantes <= 1:
         msg_alerta = f"🔥 <b>SAIR AGORA! ÚLTIMO MINUTO!</b> 🔥"
     elif minutos_restantes <= 5:
@@ -101,6 +86,7 @@ def enviar_alerta(romaneio, chat_id, cliente, minutos_restantes):
     else:
         msg_alerta = f"⚡ <b>FALTAM {minutos_restantes} MINUTOS PARA O HORÁRIO LIMITE</b>"
     
+    # Formata o horário em BR para exibição
     horario_br = romaneio['horario_obj'].astimezone(br_tz).strftime('%H:%M')
     
     mensagem = (
@@ -110,8 +96,10 @@ def enviar_alerta(romaneio, chat_id, cliente, minutos_restantes):
         f"⏳ <b>Tempo restante:</b> {minutos_restantes} minutos\n\n"
         f"{msg_alerta}"
     )
-    enviar_mensagem(chat_id, mensagem)
-    logger.info(f"✅ Alerta enviado para {cliente} - faltam {minutos_restantes} min (BR)")
+    
+    resultado = enviar_mensagem(chat_id, mensagem)
+    logger.info(f"✅ Resultado do envio: {resultado}")
+    return resultado
 
 # ===== PROCESSAMENTO DE COMANDOS =====
 def processar_comando_romaneio(texto, chat_id, message_id):
@@ -136,21 +124,27 @@ def processar_comando_romaneio(texto, chat_id, message_id):
         if hora < 0 or hora > 23 or minuto < 0 or minuto > 59:
             raise ValueError
         
+        # Obtém data/hora atual no fuso BR
         agora = datetime.now(br_tz)
+        logger.info(f"📅 Agora em BR: {agora.strftime('%d/%m/%Y %H:%M:%S')}")
+        
+        # Cria o horário do romaneio no fuso BR
         horario_obj = br_tz.localize(datetime(
             agora.year, agora.month, agora.day,
             hora, minuto, 0, 0
         ))
         
+        # Se já passou, agenda para amanhã (mantendo horário BR)
         if horario_obj < agora:
             horario_obj = horario_obj + timedelta(days=1)
-            logger.info(f"📅 Horário {horario_str} já passou hoje, agendado para amanhã")
+            logger.info(f"📅 Horário {horario_str} já passou hoje, agendado para amanhã {horario_obj.strftime('%d/%m %H:%M')}")
             
     except Exception as e:
         enviar_mensagem(chat_id, "❌ Horário inválido! Use formato HH:MM (ex: 15:00)")
         logger.error(f"Erro no horário: {e}")
         return
     
+    # Calcula minutos restantes no fuso BR
     agora = datetime.now(br_tz)
     minutos_restantes = int((horario_obj - agora).total_seconds() / 60)
     
@@ -170,13 +164,16 @@ def processar_comando_romaneio(texto, chat_id, message_id):
         if chat_id not in romaneios_por_grupo:
             romaneios_por_grupo[chat_id] = []
         romaneios_por_grupo[chat_id].append(romaneio)
+        logger.info(f"📦 Romaneio adicionado. Total agora: {len(romaneios_por_grupo[chat_id])}")
     
+    # Mensagem de confirmação com horário BR
     resposta = (
         f"✅ <b>ROMANEIO REGISTRADO</b>\n\n"
         f"📦 <b>Cliente:</b> {cliente}\n"
         f"⏰ <b>Horário limite:</b> {horario_str} (horário BR)\n"
         f"⏳ <b>Tempo restante:</b> {minutos_restantes} minutos\n\n"
-        f"⚠️ <i>Alertas serão enviados a cada 15 minutos (horário BR)</i>"
+        f"⚠️ <i>Alertas serão enviados a cada 15 minutos (horário BR)</i>\n"
+        f"🗑️ <i>Será removido automaticamente após o horário</i>"
     )
     enviar_mensagem(chat_id, resposta)
     logger.info(f"✅ Romaneio registrado: {cliente} às {horario_str} BR no grupo {chat_id}")
@@ -202,6 +199,8 @@ def processar_mensagem(update):
                 "Ex: /romaneio honda 15:00 (horário BR)\n\n"
                 "📋 <b>/listar</b> - Ver romaneios ativos\n"
                 "❌ <b>/cancelar [cliente]</b> - Cancelar romaneio\n"
+                "🧹 <b>/limpar</b> - Limpar romaneios antigos\n"
+                "🔍 <b>/debug</b> - Ver informações de debug\n"
                 "🆘 <b>/ajuda</b> - Mostrar ajuda\n"
                 "🏓 <b>/ping</b> - Testar bot\n\n"
                 "🇧🇷 <i>Horários no fuso de Brasília</i>"
@@ -209,6 +208,18 @@ def processar_mensagem(update):
         
         elif text == '/ping':
             enviar_mensagem(chat_id, "pong 🏓")
+        
+        elif text == '/debug':
+            with lock:
+                msg = "🔍 <b>DEBUG INFO</b>\n\n"
+                msg += f"Total chats: {len(romaneios_por_grupo)}\n"
+                for cid, roms in romaneios_por_grupo.items():
+                    msg += f"\nChat {cid}:\n"
+                    for r in roms:
+                        status = "🟢 ATIVO" if r['ativo'] else "🔴 INATIVO"
+                        horario_br = r['horario_obj'].astimezone(br_tz).strftime('%d/%m %H:%M')
+                        msg += f"  {r['cliente']} - {horario_br} - {status} - Alertas: {r['alertas_enviados']}\n"
+                enviar_mensagem(chat_id, msg)
         
         elif text.startswith('/romaneio'):
             processar_comando_romaneio(text, chat_id, message_id)
@@ -224,6 +235,16 @@ def processar_mensagem(update):
                     enviar_mensagem(chat_id, msg)
                 else:
                     enviar_mensagem(chat_id, "✅ Nenhum romaneio ativo no momento")
+        
+        elif text == '/limpar':
+            with lock:
+                if chat_id in romaneios_por_grupo:
+                    romaneios_por_grupo[chat_id] = [r for r in romaneios_por_grupo[chat_id] if r['ativo']]
+                    if not romaneios_por_grupo[chat_id]:
+                        del romaneios_por_grupo[chat_id]
+                    enviar_mensagem(chat_id, "🧹 Romaneios antigos limpos com sucesso!")
+                else:
+                    enviar_mensagem(chat_id, "✅ Nenhum romaneio para limpar")
         
         elif text.startswith('/cancelar'):
             cliente = text.replace('/cancelar', '').strip().upper()
@@ -253,7 +274,11 @@ def processar_mensagem(update):
                 "/listar\n\n"
                 "3️⃣ <b>Cancelar:</b>\n"
                 "/cancelar [cliente]\n\n"
-                "4️⃣ <b>Testar:</b>\n"
+                "4️⃣ <b>Limpar antigos:</b>\n"
+                "/limpar\n\n"
+                "5️⃣ <b>Debug:</b>\n"
+                "/debug\n\n"
+                "6️⃣ <b>Testar:</b>\n"
                 "/ping\n\n"
                 "⚠️ Alertas automáticos a cada 15 minutos\n"
                 "🇧🇷 Todos os horários são de Brasília"
@@ -264,104 +289,181 @@ def processar_mensagem(update):
             
     except Exception as e:
         logger.error(f"Erro ao processar mensagem: {e}")
+        logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS =====
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS COM LOGS DETALHADOS =====
 def verificar_alertas():
-    """Thread principal que verifica e envia alertas a cada 15 minutos"""
+    """Thread principal que verifica e envia alertas a cada 15 minutos (horário BR)"""
     logger.info("🔄 Thread de verificação de alertas iniciada (horário Brasília)")
+    contador = 0
     
     while True:
         try:
+            contador += 1
+            # Usar horário de Brasília
             agora = datetime.now(br_tz)
+            logger.info(f"⏰ [VERIFICAÇÃO #{contador}] Executando em {agora.strftime('%H:%M:%S')}")
+            logger.info(f"📊 Total de chats com romaneios: {len(romaneios_por_grupo)}")
             
-            with lock:
-                for chat_id, romaneios in list(romaneios_por_grupo.items()):
-                    for romaneio in romaneios[:]:
-                        if not romaneio['ativo']:
-                            continue
+            if len(romaneios_por_grupo) == 0:
+                logger.info("💤 Nenhum romaneio ativo no momento")
+            else:
+                with lock:
+                    for chat_id, romaneios in list(romaneios_por_grupo.items()):
+                        logger.info(f"📋 Chat {chat_id} tem {len(romaneios)} romaneios")
                         
-                        horario = romaneio['horario_obj']
-                        cliente = romaneio['cliente']
-                        
-                        if horario.tzinfo is None:
-                            horario = br_tz.localize(horario)
-                        
-                        if agora > horario:
-                            horario_br = horario.astimezone(br_tz).strftime('%H:%M')
-                            mensagem = (
-                                f"⛔ <b>HORÁRIO ULTRAPASSADO</b> ⛔\n\n"
-                                f"📦 <b>Cliente:</b> {cliente}\n"
-                                f"⏰ <b>Horário limite:</b> {horario_br} (BR)\n\n"
-                                f"⚠️ O horário de saída já passou!"
-                            )
-                            enviar_mensagem(chat_id, mensagem)
-                            romaneio['ativo'] = False
-                            logger.info(f"⛔ Romaneio {cliente} ultrapassou horário {horario_br}")
-                            continue
-                        
-                        minutos_restantes = int((horario - agora).total_seconds() / 60)
-                        
-                        if romaneio['alertas_enviados'] == 0 and minutos_restantes <= 60:
-                            enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
-                            romaneio['alertas_enviados'] = minutos_restantes
-                            romaneio['ultimo_alerta'] = agora
-                            logger.info(f"📊 Primeiro alerta para {cliente}: faltam {minutos_restantes} min (BR)")
-                        
-                        elif romaneio['alertas_enviados'] > 0:
-                            minutos_desde_ultimo = int((agora - romaneio['ultimo_alerta']).total_seconds() / 60)
+                        for romaneio in romaneios[:]:  # Cópia para iteração segura
+                            if not romaneio['ativo']:
+                                logger.info(f"⏭️ Romaneio {romaneio['cliente']} está inativo, ignorando")
+                                continue
                             
-                            if minutos_desde_ultimo >= 15 and minutos_restantes > 5:
-                                if abs(minutos_restantes - romaneio['alertas_enviados']) >= 10:
-                                    enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
+                            horario = romaneio['horario_obj']
+                            cliente = romaneio['cliente']
+                            
+                            # Garantir que horário tem timezone
+                            if horario.tzinfo is None:
+                                horario = br_tz.localize(horario)
+                                romaneio['horario_obj'] = horario
+                            
+                            # Calcular minutos restantes
+                            diff = horario - agora
+                            minutos_restantes = int(diff.total_seconds() / 60)
+                            segundos_restantes = int(diff.total_seconds())
+                            
+                            logger.info(f"🔍 {cliente}: Horário={horario.strftime('%H:%M')}, Agora={agora.strftime('%H:%M')}, Diff={segundos_restantes}s, Minutos restantes={minutos_restantes}")
+                            
+                            # Se já passou do horário
+                            if agora > horario:
+                                logger.info(f"⛔ {cliente} PASSOU DO HORÁRIO! {agora.strftime('%H:%M')} > {horario.strftime('%H:%M')}")
+                                horario_br = horario.astimezone(br_tz).strftime('%H:%M')
+                                mensagem = (
+                                    f"⛔ <b>HORÁRIO ULTRAPASSADO</b> ⛔\n\n"
+                                    f"📦 <b>Cliente:</b> {cliente}\n"
+                                    f"⏰ <b>Horário limite:</b> {horario_br} (BR)\n\n"
+                                    f"⚠️ O horário de saída já passou!\n"
+                                    f"🗑️ Este romaneio será removido automaticamente."
+                                )
+                                enviar_mensagem(chat_id, mensagem)
+                                
+                                # Marca como inativo
+                                romaneio['ativo'] = False
+                                logger.info(f"✅ {cliente} marcado como inativo")
+                                continue
+                            
+                            # PRIMEIRO ALERTA: quando faltam 60 minutos ou menos
+                            if romaneio['alertas_enviados'] == 0 and minutos_restantes <= 60:
+                                logger.info(f"🚨 CONDIÇÃO PRIMEIRO ALERTA ATENDIDA para {cliente}!")
+                                logger.info(f"   alertas_enviados=0, minutos_restantes={minutos_restantes} <= 60")
+                                resultado = enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
+                                if resultado:
                                     romaneio['alertas_enviados'] = minutos_restantes
                                     romaneio['ultimo_alerta'] = agora
-                                    logger.info(f"📊 Alerta de 15 min para {cliente}: faltam {minutos_restantes} min (BR)")
+                                    logger.info(f"📊 Primeiro alerta ENVIADO para {cliente}")
+                                else:
+                                    logger.error(f"❌ Falha ao enviar primeiro alerta para {cliente}")
                             
-                            elif minutos_restantes <= 5 and romaneio['alertas_enviados'] > 5:
-                                enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
-                                romaneio['alertas_enviados'] = minutos_restantes
-                                romaneio['ultimo_alerta'] = agora
-                                logger.info(f"🔥 Alerta final para {cliente}: faltam {minutos_restantes} min (BR)")
+                            # ALERTAS SUBSEQUENTES: a cada 15 minutos
+                            elif romaneio['alertas_enviados'] > 0:
+                                minutos_desde_ultimo = int((agora - romaneio['ultimo_alerta']).total_seconds() / 60)
+                                logger.info(f"📊 {cliente}: último alerta há {minutos_desde_ultimo} min, alertas_enviados={romaneio['alertas_enviados']}, faltam={minutos_restantes}")
+                                
+                                # Se passaram 15 minutos ou mais E ainda faltam mais de 5 minutos
+                                if minutos_desde_ultimo >= 15 and minutos_restantes > 5:
+                                    logger.info(f"🚨 CONDIÇÃO ALERTA 15 MIN ATENDIDA para {cliente}!")
+                                    logger.info(f"   minutos_desde_ultimo={minutos_desde_ultimo} >= 15, minutos_restantes={minutos_restantes} > 5")
+                                    resultado = enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
+                                    if resultado:
+                                        romaneio['alertas_enviados'] = minutos_restantes
+                                        romaneio['ultimo_alerta'] = agora
+                                        logger.info(f"📊 Alerta de 15 min ENVIADO para {cliente}")
+                                    else:
+                                        logger.error(f"❌ Falha ao enviar alerta de 15 min para {cliente}")
+                                
+                                # ALERTA FINAL: quando faltam 5 minutos ou menos
+                                elif minutos_restantes <= 5 and romaneio['alertas_enviados'] > 5:
+                                    logger.info(f"🔥 CONDIÇÃO ALERTA FINAL ATENDIDA para {cliente}!")
+                                    logger.info(f"   minutos_restantes={minutos_restantes} <= 5, alertas_enviados={romaneio['alertas_enviados']} > 5")
+                                    resultado = enviar_alerta(romaneio, chat_id, cliente, minutos_restantes)
+                                    if resultado:
+                                        romaneio['alertas_enviados'] = minutos_restantes
+                                        romaneio['ultimo_alerta'] = agora
+                                        logger.info(f"🔥 Alerta final ENVIADO para {cliente}")
+                                    else:
+                                        logger.error(f"❌ Falha ao enviar alerta final para {cliente}")
+                    
+                    # LIMPEZA AUTOMÁTICA
+                    for chat_id, romaneios in list(romaneios_por_grupo.items()):
+                        ativos = [r for r in romaneios if r['ativo']]
+                        if len(ativos) != len(romaneios):
+                            logger.info(f"🧹 Chat {chat_id}: {len(romaneios) - len(ativos)} romaneios inativos serão removidos")
                         
+                        romaneios_por_grupo[chat_id] = [
+                            r for r in romaneios 
+                            if r['ativo'] or (agora - r['criado_em']).total_seconds() < 3600
+                        ]
+                        if not romaneios_por_grupo[chat_id]:
+                            del romaneios_por_grupo[chat_id]
+                            logger.info(f"🧹 Chat {chat_id} removido - sem romaneios")
+            
         except Exception as e:
-            logger.error(f"Erro na verificação de alertas: {e}")
+            logger.error(f"🔥 ERRO na verificação de alertas: {e}")
+            logger.error(traceback.format_exc())
         
+        logger.info(f"💤 Aguardando 30 segundos até próxima verificação...")
         time.sleep(30)
 
-# ===== ROTAS DO FLASK =====
-@app.route("/", methods=["GET"])
-def home():
-    """Página inicial e endpoint de wake up"""
-    agora_br = datetime.now(br_tz).strftime('%d/%m/%Y %H:%M:%S')
+# ===== ROTA PARA FORÇAR VERIFICAÇÃO MANUAL =====
+@app.route("/forcar_verificacao", methods=["GET"])
+def forcar_verificacao():
+    """Força uma verificação manual dos alertas"""
+    def verificar_agora():
+        logger.info("🔴 VERIFICAÇÃO MANUAL FORÇADA INICIADA")
+        agora = datetime.now(br_tz)
+        
+        with lock:
+            for chat_id, romaneios in list(romaneios_por_grupo.items()):
+                for romaneio in romaneios[:]:
+                    if not romaneio['ativo']:
+                        continue
+                    
+                    horario = romaneio['horario_obj']
+                    cliente = romaneio['cliente']
+                    minutos_restantes = int((horario - agora).total_seconds() / 60)
+                    
+                    logger.info(f"🔍 MANUAL: {cliente} - Horário: {horario.strftime('%H:%M')} - Faltam: {minutos_restantes} min - Alertas enviados: {romaneio['alertas_enviados']}")
+        
+        logger.info("✅ VERIFICAÇÃO MANUAL FINALIZADA")
     
-    # HTML bonitinho pra mostrar que tá vivo
-    html = f"""
-    <html>
-        <head>
-            <title>Bot de Romaneios</title>
-            <meta http-equiv="refresh" content="30">
-            <style>
-                body {{ font-family: Arial; text-align: center; padding: 50px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }}
-                h1 {{ font-size: 3em; margin-bottom: 20px; }}
-                p {{ font-size: 1.5em; margin: 10px; }}
-                .status {{ background: rgba(255,255,255,0.2); padding: 20px; border-radius: 10px; display: inline-block; }}
-                .alive {{ color: #00ff00; font-weight: bold; }}
-            </style>
-        </head>
-        <body>
-            <h1>🤖 Bot de Romaneios</h1>
-            <div class="status">
-                <p class="alive">✅ BOT VIVO E ACORDADO!</p>
-                <p>🇧🇷 Horário BR: {agora_br}</p>
-                <p>⏰ Monitoramento a cada 30 segundos</p>
-                <p>💤 Sistema anti-sono ativo</p>
-                <p>📊 Romaneios ativos: {sum(len(r) for r in romaneios_por_grupo.values())}</p>
-            </div>
-            <p style="margin-top: 50px; font-size: 1em;">⏰ Esta página é atualizada a cada 30 segundos para manter o bot acordado</p>
-        </body>
-    </html>
-    """
-    return html, 200
+    threading.Thread(target=verificar_agora).start()
+    return "Verificação manual iniciada! Verifique os logs.", 200
+
+# ===== ROTA PARA DEBUG DO ESTADO =====
+@app.route("/estado", methods=["GET"])
+def estado():
+    """Mostra o estado atual dos romaneios"""
+    with lock:
+        info = {
+            "total_chats": len(romaneios_por_grupo),
+            "chats": {}
+        }
+        for chat_id, romaneios in romaneios_por_grupo.items():
+            info["chats"][str(chat_id)] = [
+                {
+                    "cliente": r["cliente"],
+                    "horario": r["horario_obj"].astimezone(br_tz).strftime("%d/%m %H:%M"),
+                    "ativo": r["ativo"],
+                    "alertas_enviados": r["alertas_enviados"],
+                    "minutos_restantes": int((r["horario_obj"] - datetime.now(br_tz)).total_seconds() / 60)
+                }
+                for r in romaneios
+            ]
+    return jsonify(info), 200
+
+# ===== ROTAS DO FLASK =====
+@app.route("/")
+def home():
+    agora_br = datetime.now(br_tz).strftime('%d/%m/%Y %H:%M:%S')
+    return f"🤖 Bot de Romaneios rodando! 🚀\n🇧🇷 Horário BR: {agora_br}", 200
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -381,6 +483,7 @@ def webhook():
         
     except Exception as e:
         logger.error(f"🔥 ERRO NO WEBHOOK: {e}")
+        logger.error(traceback.format_exc())
         return "ok", 200
 
 @app.route("/testar", methods=["GET"])
@@ -394,14 +497,13 @@ def testar():
         "romaneios_ativos": sum(len(r) for r in romaneios_por_grupo.values()),
         "fuso_horario": "America/Sao_Paulo (BR)",
         "horario_atual_br": agora_br,
-        "anti_sono": "ativo",
         "timestamp": datetime.now().isoformat()
     }), 200
 
 @app.route("/api/testar", methods=["POST"])
 def api_testar():
     """Endpoint para testar o envio de alertas"""
-    mensagem = "🧪 <b>ALERTA DE TESTE</b>\n\nSistema de notificações funcionando corretamente!\n🇧🇷 Horário BR configurado!\n💤 Anti-sono ativo!"
+    mensagem = "🧪 <b>ALERTA DE TESTE</b>\n\nSistema de notificações funcionando corretamente!\n🇧🇷 Horário BR configurado!"
     
     for chat_id in CHAT_IDS:
         enviar_mensagem(chat_id, mensagem)
@@ -413,14 +515,8 @@ def api_testar():
 
 # ===== INICIALIZAÇÃO =====
 if TOKEN:
-    # Inicia thread de verificação de alertas
     threading.Thread(target=verificar_alertas, daemon=True).start()
-    
-    # Inicia thread anti-sono
-    threading.Thread(target=manter_acordado, daemon=True).start()
-    
     logger.info("✅ Sistema iniciado com sucesso!")
-    logger.info("💤 Anti-sono ativado - bot nunca mais vai dormir!")
 else:
     logger.error("🚨 BOT NÃO INICIADO - Token não configurado!")
 
