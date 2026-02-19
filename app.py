@@ -292,7 +292,7 @@ def processar_mensagem(update):
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS CORRIGIDA =====
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS CORRIGIDA (COM LIMPEZA COMENTADA) =====
 def verificar_alertas():
     """Thread principal que verifica e envia alertas"""
     logger.info("🔄 Thread de verificação de alertas iniciada")
@@ -303,12 +303,14 @@ def verificar_alertas():
             contador += 1
             agora = datetime.now(br_tz)
             
-            # CRIA UMA CÓPIA DA LISTA DE CHATS PARA EVITAR PROBLEMAS DE CONCORRÊNCIA
+            # CRIA UMA CÓPIA DA LISTA DE CHATS
             chats_para_verificar = []
             
             with lock:
-                # Faz uma cópia profunda dos dados necessários
+                logger.info(f"📊 DENTRO DO LOCK - Total de chats: {len(romaneios_por_grupo)}")
                 for chat_id, romaneios in romaneios_por_grupo.items():
+                    logger.info(f"  Chat {chat_id} tem {len(romaneios)} romaneios")
+                    
                     romaneios_copia = []
                     for r in romaneios:
                         if r['ativo']:
@@ -355,7 +357,6 @@ def verificar_alertas():
                             )
                             enviar_mensagem(chat_id, mensagem)
                             
-                            # Atualiza o estado (agora com lock)
                             with lock:
                                 for r_original in romaneios_por_grupo.get(chat_id, []):
                                     if r_original['cliente'] == cliente and r_original['ativo']:
@@ -402,6 +403,21 @@ def verificar_alertas():
                                             r_original['alertas_enviados'] = minutos_restantes
                                             r_original['ultimo_alerta'] = agora
                                             logger.info(f"✅ Alerta final registrado para {cliente}")
+            
+            # ===== LIMPEZA AUTOMÁTICA COMENTADA PARA TESTE =====
+            # with lock:
+            #     for chat_id, romaneios in list(romaneios_por_grupo.items()):
+            #         ativos = [r for r in romaneios if r['ativo']]
+            #         if len(ativos) != len(romaneios):
+            #             logger.info(f"🧹 Chat {chat_id}: {len(romaneios) - len(ativos)} romaneios inativos serão removidos")
+            #         
+            #         romaneios_por_grupo[chat_id] = [
+            #             r for r in romaneios 
+            #             if r['ativo'] or (agora - r['criado_em']).total_seconds() < 3600
+            #         ]
+            #         if not romaneios_por_grupo[chat_id]:
+            #             del romaneios_por_grupo[chat_id]
+            #             logger.info(f"🧹 Chat {chat_id} removido - sem romaneios")
             
         except Exception as e:
             logger.error(f"🔥 ERRO na verificação: {e}")
