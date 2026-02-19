@@ -376,7 +376,7 @@ def processar_mensagem(update):
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS CORRIGIDA (SEM RESET) =====
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS =====
 def verificar_alertas():
     """Thread principal que verifica e envia alertas"""
     global romaneios_por_grupo
