@@ -363,11 +363,10 @@ def processar_mensagem(update):
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS COM MONITORAMENTO =====
-# CORRIGIDO: global agora está no topo da função
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS CORRIGIDA (SEM RESET) =====
 def verificar_alertas():
     """Thread principal que verifica e envia alertas"""
-    global romaneios_por_grupo  # <--- AGORA NA POSIÇÃO CORRETA!
+    global romaneios_por_grupo
     logger.info("🔄 Thread de verificação de alertas iniciada")
     contador = 0
     
@@ -382,10 +381,7 @@ def verificar_alertas():
                 id_antes = id(romaneios_por_grupo)
                 logger.info(f"📊 ANTES da iteração #{contador}: {len(estado_antes)} chats, ID: {id_antes}")
             
-            # PROTEÇÃO: verifica se o dicionário principal ainda existe
-            if 'romaneios_por_grupo' not in globals():
-                logger.error("🔥 DICIONÁRIO GLOBAL PERDIDO! Recriando...")
-                romaneios_por_grupo = {}
+            # 🚨 VERIFICAÇÃO REMOVIDA - NÃO RESETA MAIS O DICIONÁRIO 🚨
             
             # CRIA UMA CÓPIA DA LISTA DE CHATS
             chats_para_verificar = []
