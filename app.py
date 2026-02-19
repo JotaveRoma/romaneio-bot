@@ -376,11 +376,16 @@ def processar_mensagem(update):
         logger.error(f"Erro ao processar mensagem: {e}")
         logger.error(traceback.format_exc())
 
-# ===== THREAD DE VERIFICAÇÃO DE ALERTAS =====
+# ===== THREAD DE VERIFICAÇÃO DE ALERTAS CORRIGIDA =====
 def verificar_alertas():
     """Thread principal que verifica e envia alertas"""
     global romaneios_por_grupo
     logger.info("🔄 Thread de verificação de alertas iniciada")
+    
+    # AGUARDA O SISTEMA INICIAR COMPLETAMENTE
+    logger.info("⏳ Aguardando 5 segundos para estabilização...")
+    time.sleep(5)
+    
     contador = 0
     
     while True:
@@ -388,45 +393,36 @@ def verificar_alertas():
             contador += 1
             agora = datetime.now(br_tz)
             
+            # AGUARDA UM POUCO PARA PROCESSAMENTO DE MENSAGENS
+            time.sleep(1)
+            
             # MONITOR: salva estado antes
             with lock:
-                estado_antes = dict(romaneios_por_grupo) if romaneios_por_grupo else {}
-                id_antes = id(romaneios_por_grupo)
-                logger.info(f"📊 ANTES da iteração #{contador}: {len(estado_antes)} chats, ID: {id_antes}")
-            
-            # CRIA UMA CÓPIA DA LISTA DE CHATS
-            chats_para_verificar = []
-            
-            with lock:
-                # LOG DO ID DO DICIONÁRIO PARA DETECTAR RESET
-                logger.info(f"🆔 ID do dicionário na verificação: {id(romaneios_por_grupo)}")
-                logger.info(f"📊 DENTRO DO LOCK - Total de chats: {len(romaneios_por_grupo)}")
-                
-                # LISTA TODOS OS CHATS PARA DEBUG
-                for chat_id, romaneios in list(romaneios_por_grupo.items()):
-                    logger.info(f"  Chat {chat_id} tem {len(romaneios)} romaneios")
-                    
-                    romaneios_copia = []
+                # FAZ UMA CÓPIA PROFUNDA DO ESTADO ATUAL
+                estado_atual = {}
+                for chat_id, romaneios in romaneios_por_grupo.items():
+                    estado_atual[chat_id] = []
                     for r in romaneios:
                         if r['ativo']:
-                            romaneios_copia.append({
+                            estado_atual[chat_id].append({
                                 'cliente': r['cliente'],
                                 'horario_obj': r['horario_obj'],
                                 'chat_id': r['chat_id'],
                                 'alertas_enviados': r['alertas_enviados'],
                                 'ultimo_alerta': r['ultimo_alerta']
                             })
-                    if romaneios_copia:
-                        chats_para_verificar.append((chat_id, romaneios_copia))
+                
+                id_atual = id(romaneios_por_grupo)
+                total_chats = len(estado_atual)
+                
+                logger.info(f"📊 ANTES da iteração #{contador}: {total_chats} chats, ID: {id_atual}")
             
-            # AGORA VERIFICA FORA DO LOCK
-            logger.info(f"⏰ [VERIFICAÇÃO #{contador}] Executando em {agora.strftime('%H:%M:%S')}")
-            logger.info(f"📊 Total de chats com romaneios (cópia): {len(chats_para_verificar)}")
-            
-            if not chats_para_verificar:
+            # SE NÃO HÁ ROMANEIOS, PULA
+            if total_chats == 0:
                 logger.info("💤 Nenhum romaneio ativo no momento")
             else:
-                for chat_id, romaneios in chats_para_verificar:
+                # PROCESSA CADA CHAT
+                for chat_id, romaneios in estado_atual.items():
                     logger.info(f"📋 Chat {chat_id} tem {len(romaneios)} romaneios ativos")
                     
                     for romaneio in romaneios:
@@ -453,7 +449,6 @@ def verificar_alertas():
                             enviar_mensagem(chat_id, mensagem)
                             
                             with lock:
-                                # Verifica se o chat ainda existe
                                 if chat_id in romaneios_por_grupo:
                                     for r_original in romaneios_por_grupo[chat_id]:
                                         if r_original['cliente'] == cliente and r_original['ativo']:
@@ -504,33 +499,11 @@ def verificar_alertas():
                                                 r_original['ultimo_alerta'] = agora
                                                 logger.info(f"✅ Alerta final registrado para {cliente}")
             
-            # MONITOR: verifica depois
-            with lock:
-                estado_depois = dict(romaneios_por_grupo) if romaneios_por_grupo else {}
-                id_depois = id(romaneios_por_grupo)
-                
-                if id_depois != id_antes:
-                    logger.error(f"🔥 ID DO DICIONÁRIO MUDOU na iteração #{contador}!")
-                    logger.error(f"ID antes: {id_antes}, ID depois: {id_depois}")
-                    if estado_antes:
-                        logger.error(f"Restaurando {len(estado_antes)} chats")
-                        romaneios_por_grupo.clear()
-                        romaneios_por_grupo.update(estado_antes)
-                
-                elif len(estado_depois) < len(estado_antes):
-                    perdidos = set(estado_antes.keys()) - set(estado_depois.keys())
-                    logger.error(f"🔥 DADOS PERDIDOS na iteração #{contador}!")
-                    logger.error(f"Tinha {len(estado_antes)} chats, agora tem {len(estado_depois)}")
-                    logger.error(f"Chats perdidos: {perdidos}")
-                    if estado_antes:
-                        logger.error(f"Restaurando...")
-                        romaneios_por_grupo.clear()
-                        romaneios_por_grupo.update(estado_antes)
-            
         except Exception as e:
             logger.error(f"🔥 ERRO na verificação: {e}")
             logger.error(traceback.format_exc())
         
+        # AGUARDA 30 SEGUNDOS ATÉ A PRÓXIMA VERIFICAÇÃO
         time.sleep(30)
 
 # ===== ROTA PARA FORÇAR VERIFICAÇÃO MANUAL =====
