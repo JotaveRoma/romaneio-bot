@@ -64,6 +64,7 @@ def salvar_dados():
                     "ativo": r["ativo"],
                     "ultimo_alerta": r["ultimo_alerta"].isoformat()
                 })
+
         with open(ARQUIVO_DADOS, "w") as f:
             json.dump(dados, f)
 
@@ -95,7 +96,7 @@ def registrar_romaneio(texto, chat_id):
     match = re.match(padrao, texto.strip())
 
     if not match:
-        enviar_mensagem(chat_id, "Use: /romaneio cliente HH:MM")
+        enviar_mensagem(chat_id, "Use: /romaneio CLIENTE HH:MM")
         return
 
     cliente = match.group(1).upper()
@@ -157,7 +158,7 @@ def executar_verificacao():
                     )
                     romaneio["ativo"] = False
 
-                # Envia alerta a cada 15 min
+                # Alertas a cada 15 minutos na última hora
                 elif minutos <= 60:
                     segundos_passados = (agora - romaneio["ultimo_alerta"]).total_seconds()
 
@@ -174,14 +175,12 @@ def executar_verificacao():
 # SCHEDULER LOCAL (RENDER FREE)
 # ==================================================
 
-def scheduler_local():
-    port = os.environ.get("PORT", 5000)
-
+def scheduler_background():
     while True:
         try:
-            requests.get(f"http://127.0.0.1:{port}/cron", timeout=10)
+            executar_verificacao()
         except Exception as e:
-            logger.error(f"Erro scheduler: {e}")
+            logger.error(f"Erro na verificação: {e}")
 
         time.sleep(60)
 
@@ -208,18 +207,18 @@ def webhook():
             with lock:
                 if chat_id in romaneios_por_grupo:
                     msg = "📋 <b>Romaneios ativos:</b>\n\n"
+                    ativos = False
                     for r in romaneios_por_grupo[chat_id]:
                         if r["ativo"]:
+                            ativos = True
                             msg += f"📦 {r['cliente']} - {r['horario']}\n"
-                    enviar_mensagem(chat_id, msg)
+                    if ativos:
+                        enviar_mensagem(chat_id, msg)
+                    else:
+                        enviar_mensagem(chat_id, "Nenhum romaneio ativo")
                 else:
                     enviar_mensagem(chat_id, "Nenhum romaneio ativo")
 
-    return "ok", 200
-
-@app.route("/cron", methods=["GET"])
-def cron():
-    executar_verificacao()
     return "ok", 200
 
 @app.route("/estado")
@@ -232,7 +231,7 @@ def estado():
 
 carregar_dados()
 
-threading.Thread(target=scheduler_local, daemon=True).start()
+threading.Thread(target=scheduler_background, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
